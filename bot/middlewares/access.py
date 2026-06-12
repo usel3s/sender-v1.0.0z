@@ -30,6 +30,7 @@ class AccessMiddleware(BaseMiddleware):
         "settings_",
         "broadcast_",
         "auth_",
+        "account_",
         "menu_back",
     )
 

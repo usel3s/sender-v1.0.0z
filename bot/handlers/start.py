@@ -61,31 +61,35 @@ async def menu_back(callback: CallbackQuery, state: FSMContext, db_user: User) -
         return
     await state.clear()
     text = await get_start_text()
-    await chat_ui.show_from_callback(callback, db_user.id, text)
+    await chat_ui.show_from_callback(callback, db_user.id, text, with_main_menu=True)
     await callback.answer()
 
 
 @router.message(F.text == "Профиль")
 async def menu_profile(message: Message, db_user: User) -> None:
+    from bot.services.account_service import get_selected_account_ids, get_user_accounts
     from bot.services.dm_sender import broadcast_manager
-    from database.models import Account, UserSettings
+    from database.models import UserSettings
 
     async with async_session() as session:
         settings = (
             await session.execute(select(UserSettings).where(UserSettings.user_id == db_user.id))
         ).scalar_one_or_none()
-        accounts = (
-            await session.execute(select(Account).where(Account.user_id == db_user.id))
-        ).scalars().all()
+        accounts = await get_user_accounts(session, db_user.id)
+        selected_ids = await get_selected_account_ids(session, db_user.id) if accounts else []
 
     running = broadcast_manager.is_running(db_user.tg_id)
-    account_text = accounts[0].name if accounts else "Не подключён"
     delay = settings.message_delay_sec if settings else 60
+    account_text = (
+        f"{len(selected_ids)} из {len(accounts)} для рассылки"
+        if accounts
+        else "Не подключён"
+    )
     await chat_ui.show_from_message(
         message,
         db_user.id,
         f"{E.e(E.PROFILE, '👤')} <b>Профиль</b>\n\n"
-        f"Аккаунт: <b>{account_text}</b>\n"
+        f"Аккаунты: <b>{account_text}</b>\n"
         f"КД: <b>{delay} сек</b>\n"
         f"Рассылка: <b>{'активна' if running else 'остановлена'}</b>",
         reply_markup=profile_keyboard(),

@@ -17,6 +17,16 @@ async def init_db() -> None:
                 await conn.execute(text("ALTER TABLE user_settings ADD COLUMN ui_message_id INTEGER"))
             except Exception:
                 pass
+            try:
+                await conn.execute(
+                    text("ALTER TABLE user_settings ADD COLUMN selected_account_ids_json TEXT DEFAULT '[]'")
+                )
+            except Exception:
+                pass
+            try:
+                await conn.execute(text("ALTER TABLE broadcast_jobs ADD COLUMN account_ids_json TEXT DEFAULT '[]'"))
+            except Exception:
+                pass
 
     async with async_session() as session:
         settings = await session.get(BotSettings, 1)

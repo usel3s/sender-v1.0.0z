@@ -107,32 +107,7 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
 
 
 def account_method_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="По номеру телефона",
-                    callback_data="auth_phone",
-                    icon_custom_emoji_id=E.WRITE,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="По QR-коду",
-                    callback_data="auth_qr",
-                    icon_custom_emoji_id=E.EYE,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Сессия Telegram Desktop",
-                    callback_data="auth_tdata",
-                    icon_custom_emoji_id=E.FILE,
-                )
-            ],
-            [back_button("menu_back")],
-        ]
-    )
+    return account_add_keyboard()
 
 
 def qr_check_keyboard() -> InlineKeyboardMarkup:
@@ -179,8 +154,18 @@ def settings_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def broadcast_keyboard(running: bool = False) -> InlineKeyboardMarkup:
+def broadcast_keyboard(running: bool = False, show_accounts: bool = True) -> InlineKeyboardMarkup:
     rows = []
+    if show_accounts and not running:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Аккаунты для рассылки",
+                    callback_data="broadcast_accounts",
+                    icon_custom_emoji_id=E.PROFILE,
+                )
+            ]
+        )
     if not running:
         rows.append(
             [
@@ -203,6 +188,92 @@ def broadcast_keyboard(running: bool = False) -> InlineKeyboardMarkup:
         )
     rows.append([back_button("menu_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def broadcast_accounts_keyboard(accounts, selected_ids: set[int]) -> InlineKeyboardMarkup:
+    rows = []
+    for account in accounts:
+        mark = "✅" if account.id in selected_ids else "⬜"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{mark} {account.name or account.phone_number or 'Аккаунт'}",
+                    callback_data=f"broadcast_toggle_{account.id}",
+                    icon_custom_emoji_id=E.PERSON_CHECK if account.id in selected_ids else E.PERSON_CROSS,
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Выбрать все",
+                callback_data="broadcast_select_all",
+                icon_custom_emoji_id=E.CHECK,
+            ),
+            InlineKeyboardButton(
+                text="Снять все",
+                callback_data="broadcast_select_none",
+                icon_custom_emoji_id=E.CROSS,
+            ),
+        ]
+    )
+    rows.append([back_button("broadcast_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def account_list_keyboard(accounts) -> InlineKeyboardMarkup:
+    rows = []
+    for account in accounts:
+        label = account.name or account.phone_number or f"#{account.id}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"🗑 {label}",
+                    callback_data=f"account_delete_{account.id}",
+                    icon_custom_emoji_id=E.TRASH,
+                )
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Добавить аккаунт",
+                callback_data="account_add",
+                icon_custom_emoji_id=E.WRITE,
+            )
+        ]
+    )
+    rows.append([back_button("menu_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def account_add_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="По номеру телефона",
+                    callback_data="auth_phone",
+                    icon_custom_emoji_id=E.WRITE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="По QR-коду",
+                    callback_data="auth_qr",
+                    icon_custom_emoji_id=E.EYE,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Сессия Telegram Desktop",
+                    callback_data="auth_tdata",
+                    icon_custom_emoji_id=E.FILE,
+                )
+            ],
+            [back_button("account_list")],
+        ]
+    )
 
 
 def confirm_keyboard(yes_data: str, no_data: str = "menu_back") -> InlineKeyboardMarkup:

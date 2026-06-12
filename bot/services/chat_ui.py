@@ -174,6 +174,8 @@ async def show(
                 else:
                     await _edit_ui_message(bot, chat_id, edit_id, text, inline_markup)
                 await _set_ui_message_id(user_id, edit_id)
+                if keep_menu and inline_markup is None:
+                    await _ensure_reply_keyboard(bot, chat_id)
                 return edit_id
             except TelegramBadRequest as exc:
                 err = str(exc).lower()
@@ -192,10 +194,15 @@ async def show(
                 if stored_id == edit_id:
                     stored_id = None
 
-        if stored_id:
-            await _delete_message(bot, chat_id, stored_id)
-
         if with_main_menu:
+            ids_to_delete: set[int] = set()
+            if callback and callback.message:
+                ids_to_delete.add(callback.message.message_id)
+            if stored_id:
+                ids_to_delete.add(stored_id)
+            for message_id in ids_to_delete:
+                await _delete_message(bot, chat_id, message_id)
+
             sent = await bot.send_message(
                 chat_id,
                 text,
@@ -204,6 +211,9 @@ async def show(
             )
             await _set_ui_message_id(user_id, sent.message_id)
             return sent.message_id
+
+        if stored_id:
+            await _delete_message(bot, chat_id, stored_id)
 
         message_id = await _send_new_ui_message(
             bot,
@@ -244,6 +254,7 @@ async def show_from_callback(
     text: str,
     reply_markup=None,
     *,
+    with_main_menu: bool = False,
     keep_menu: bool = True,
 ) -> int | None:
     if callback.message is None:
@@ -255,6 +266,7 @@ async def show_from_callback(
         text=text,
         reply_markup=reply_markup,
         callback=callback,
+        with_main_menu=with_main_menu,
         keep_menu=keep_menu,
     )
 

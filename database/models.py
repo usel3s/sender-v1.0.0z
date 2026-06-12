@@ -44,6 +44,7 @@ class UserSettings(Base):
     quota_hour_slot: Mapped[str | None] = mapped_column(String(16), nullable=True)
     quota_hour_count: Mapped[int] = mapped_column(Integer, default=0)
     ui_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    selected_account_ids_json: Mapped[str] = mapped_column(Text, default="[]")
 
     user: Mapped["User"] = relationship(back_populates="settings")
 
@@ -84,7 +85,8 @@ class BroadcastJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"))
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"), nullable=True)
+    account_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     message_html: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="pending")
     sent_count: Mapped[int] = mapped_column(Integer, default=0)

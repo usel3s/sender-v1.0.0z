@@ -8,7 +8,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import select
 
-from bot.keyboards.main import account_method_keyboard, auth_cancel_keyboard, qr_check_keyboard
+from bot.keyboards.main import (
+    account_add_keyboard,
+    account_list_keyboard,
+    account_method_keyboard,
+    auth_cancel_keyboard,
+    qr_check_keyboard,
+)
+from bot.services.account_service import ensure_account_selected, get_user_accounts
 from bot.services import chat_ui
 from bot.services.auth_service import authorize_by_phone, check_qr_authorized, generate_qr_code, send_code_to_phone
 from bot.services.tdata_service import extract_tdata_root, import_tdata_to_session_string
@@ -44,15 +51,29 @@ async def _disconnect_phone_client(user_tg_id: int) -> None:
         pass
 
 
-def _account_menu_text() -> str:
-    return f"{E.e(E.SETTINGS, '⚙️')} <b>Подключение аккаунта</b>\n\nВыберите способ входа:"
+def _account_menu_text(accounts: list[Account]) -> str:
+    lines = [f"{E.e(E.SETTINGS, '⚙️')} <b>Аккаунты</b>\n"]
+    if accounts:
+        lines.append(f"Подключено: <b>{len(accounts)}</b>\n")
+        for index, account in enumerate(accounts, start=1):
+            phone = account.phone_number or "—"
+            lines.append(f"{index}. <b>{account.name}</b> ({phone})")
+        lines.append("\nУдаление — кнопкой 🗑. Добавление — «Добавить аккаунт».")
+    else:
+        lines.append("Аккаунты не подключены.\n\nВыберите способ добавления:")
+    return "\n".join(lines)
 
 
-async def save_account(db_user: User, session_string: str, name: str, phone: str | None, fingerprint) -> None:
+async def save_account(db_user: User, session_string: str, name: str, phone: str | None, fingerprint) -> Account:
     async with async_session() as session:
-        existing = (
-            await session.execute(select(Account).where(Account.user_id == db_user.id))
-        ).scalar_one_or_none()
+        existing = None
+        if phone:
+            existing = (
+                await session.execute(
+                    select(Account).where(Account.user_id == db_user.id, Account.phone_number == phone)
+                )
+            ).scalar_one_or_none()
+
         if existing:
             existing.session_string = session_string
             existing.name = name
@@ -62,32 +83,87 @@ async def save_account(db_user: User, session_string: str, name: str, phone: str
             existing.app_version = fingerprint.app_version
             existing.lang_code = fingerprint.lang_code
             existing.status = "active"
+            account = existing
         else:
-            session.add(
-                Account(
-                    user_id=db_user.id,
-                    session_string=session_string,
-                    name=name,
-                    phone_number=phone,
-                    device_model=fingerprint.device_model,
-                    system_version=fingerprint.system_version,
-                    app_version=fingerprint.app_version,
-                    lang_code=fingerprint.lang_code,
-                    status="active",
-                )
+            account = Account(
+                user_id=db_user.id,
+                session_string=session_string,
+                name=name,
+                phone_number=phone,
+                device_model=fingerprint.device_model,
+                system_version=fingerprint.system_version,
+                app_version=fingerprint.app_version,
+                lang_code=fingerprint.lang_code,
+                status="active",
             )
+            session.add(account)
+            await session.flush()
+
+        await ensure_account_selected(session, db_user.id, account.id)
         await session.commit()
+        await session.refresh(account)
+        return account
+
+
+async def _show_account_menu(message_or_callback, db_user: User, *, from_callback: bool = False) -> None:
+    async with async_session() as session:
+        accounts = await get_user_accounts(session, db_user.id)
+
+    text = _account_menu_text(accounts)
+    markup = account_list_keyboard(accounts) if accounts else account_add_keyboard()
+    if from_callback:
+        await chat_ui.show_from_callback(message_or_callback, db_user.id, text, reply_markup=markup)
+    else:
+        await chat_ui.show_from_message(message_or_callback, db_user.id, text, reply_markup=markup)
 
 
 @router.message(F.text == "Аккаунт")
 async def menu_account(message: Message, state: FSMContext, db_user: User) -> None:
     await state.clear()
-    await chat_ui.show_from_message(
-        message,
+    await _show_account_menu(message, db_user)
+
+
+@router.callback_query(F.data == "account_list")
+async def account_list(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
+    await state.clear()
+    await _show_account_menu(callback, db_user, from_callback=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "account_add")
+async def account_add(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
+    await state.clear()
+    await chat_ui.show_from_callback(
+        callback,
         db_user.id,
-        _account_menu_text(),
-        reply_markup=account_method_keyboard(),
+        f"{E.e(E.WRITE, '✍')} <b>Добавить аккаунт</b>\n\nВыберите способ входа:",
+        reply_markup=account_add_keyboard(),
     )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("account_delete_"))
+async def account_delete(callback: CallbackQuery, db_user: User) -> None:
+    account_id = int(callback.data.removeprefix("account_delete_"))
+    async with async_session() as session:
+        account = (
+            await session.execute(
+                select(Account).where(Account.id == account_id, Account.user_id == db_user.id)
+            )
+        ).scalar_one_or_none()
+        if account is None:
+            await callback.answer("Аккаунт не найден", show_alert=True)
+            return
+
+        from bot.services.account_service import get_selected_account_ids, set_selected_account_ids
+
+        account.status = "deleted"
+        selected = await get_selected_account_ids(session, db_user.id)
+        await set_selected_account_ids(session, db_user.id, [item for item in selected if item != account_id])
+        await session.commit()
+
+    await _show_account_menu(callback, db_user, from_callback=True)
+    await callback.answer("Аккаунт удалён")
 
 
 @router.callback_query(F.data == "auth_cancel")
@@ -102,11 +178,14 @@ async def auth_cancel(callback: CallbackQuery, state: FSMContext, db_user: User)
         _qr_clients.pop(uid, None)
     _qr_events.pop(uid, None)
     await state.clear()
+    async with async_session() as session:
+        accounts = await get_user_accounts(session, db_user.id)
+    markup = account_list_keyboard(accounts) if accounts else account_add_keyboard()
     await chat_ui.show_from_callback(
         callback,
         db_user.id,
-        _account_menu_text(),
-        reply_markup=account_method_keyboard(),
+        _account_menu_text(accounts),
+        reply_markup=markup,
     )
     await callback.answer()
 
@@ -222,13 +301,15 @@ async def auth_code_received(message: Message, state: FSMContext, db_user: User)
 
     await _disconnect_phone_client(message.from_user.id)
 
-    await save_account(db_user, session_string, name, data["phone"], fingerprint)
+    account = await save_account(db_user, session_string, name, data["phone"], fingerprint)
     await state.clear()
+    async with async_session() as session:
+        accounts = await get_user_accounts(session, db_user.id)
     await chat_ui.show_from_message(
         message,
         db_user.id,
-        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{name}</b> успешно подключён!",
-        reply_markup=account_method_keyboard(),
+        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{account.name}</b> успешно подключён!",
+        reply_markup=account_list_keyboard(accounts),
     )
 
 
@@ -275,13 +356,15 @@ async def auth_password_received(message: Message, state: FSMContext, db_user: U
         return
 
     await _disconnect_phone_client(message.from_user.id)
-    await save_account(db_user, session_string, name, data["phone"], fingerprint)
+    account = await save_account(db_user, session_string, name, data["phone"], fingerprint)
     await state.clear()
+    async with async_session() as session:
+        accounts = await get_user_accounts(session, db_user.id)
     await chat_ui.show_from_message(
         message,
         db_user.id,
-        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{name}</b> успешно подключён!",
-        reply_markup=account_method_keyboard(),
+        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{account.name}</b> успешно подключён!",
+        reply_markup=account_list_keyboard(accounts),
     )
 
 
@@ -338,13 +421,15 @@ async def auth_qr_check(callback: CallbackQuery, state: FSMContext, db_user: Use
     _qr_clients.pop(callback.from_user.id, None)
     _qr_events.pop(callback.from_user.id, None)
 
-    await save_account(db_user, session_string, name, None, fingerprint)
+    account = await save_account(db_user, session_string, name, None, fingerprint)
     await state.clear()
+    async with async_session() as session:
+        accounts = await get_user_accounts(session, db_user.id)
     await chat_ui.show_from_callback(
         callback,
         db_user.id,
-        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{name}</b> успешно подключён через QR!",
-        reply_markup=account_method_keyboard(),
+        f"{E.e(E.CHECK, '✅')} Аккаунт <b>{account.name}</b> успешно подключён через QR!",
+        reply_markup=account_list_keyboard(accounts),
     )
     await callback.answer()
 
@@ -410,13 +495,15 @@ async def auth_tdata_received(message: Message, state: FSMContext, db_user: User
             )
             return
 
-        await save_account(db_user, session_string, name, phone, fingerprint)
+        account = await save_account(db_user, session_string, name, phone, fingerprint)
         await state.clear()
+        async with async_session() as session:
+            accounts = await get_user_accounts(session, db_user.id)
         await chat_ui.show_from_message(
             message,
             db_user.id,
-            f"{E.e(E.CHECK, '✅')} Аккаунт <b>{name}</b> импортирован из Telegram Desktop!",
-            reply_markup=account_method_keyboard(),
+            f"{E.e(E.CHECK, '✅')} Аккаунт <b>{account.name}</b> импортирован из Telegram Desktop!",
+            reply_markup=account_list_keyboard(accounts),
         )
     finally:
         shutil.rmtree(extract_dir, ignore_errors=True)
