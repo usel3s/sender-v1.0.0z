@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import select
 
-from bot.keyboards.main import account_method_keyboard, qr_check_keyboard
+from bot.keyboards.main import account_method_keyboard, auth_cancel_keyboard, qr_check_keyboard
 from bot.services import chat_ui
 from bot.services.auth_service import authorize_by_phone, check_qr_authorized, generate_qr_code, send_code_to_phone
 from bot.services.tdata_service import extract_tdata_root, import_tdata_to_session_string
@@ -25,6 +25,23 @@ router = Router()
 _phone_clients: dict[int, object] = {}
 _qr_clients: dict[int, object] = {}
 _qr_events: dict[int, asyncio.Event] = {}
+
+_UNRECOVERABLE_AUTH_ERRORS = frozenset(
+    {
+        "Код подтверждения истек",
+        "PASSWORD_HASH_INVALID",
+    }
+)
+
+
+async def _disconnect_phone_client(user_tg_id: int) -> None:
+    client = _phone_clients.pop(user_tg_id, None)
+    if client is None:
+        return
+    try:
+        await client.disconnect()
+    except Exception:
+        pass
 
 
 def _account_menu_text() -> str:
@@ -76,12 +93,7 @@ async def menu_account(message: Message, state: FSMContext, db_user: User) -> No
 @router.callback_query(F.data == "auth_cancel")
 async def auth_cancel(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
     uid = callback.from_user.id
-    if uid in _phone_clients:
-        try:
-            await _phone_clients[uid].disconnect()
-        except Exception:
-            pass
-        _phone_clients.pop(uid, None)
+    await _disconnect_phone_client(uid)
     if uid in _qr_clients:
         try:
             await _qr_clients[uid].disconnect()
@@ -111,7 +123,7 @@ async def auth_phone(callback: CallbackQuery, state: FSMContext, db_user: User) 
         callback,
         db_user.id,
         f"{E.e(E.WRITE, '✍')} Отправьте номер телефона в формате <code>+79991234567</code>",
-        reply_markup=account_method_keyboard(),
+        reply_markup=auth_cancel_keyboard(),
     )
     await state.set_state(AccountStates.waiting_phone)
     await callback.answer()
@@ -125,7 +137,7 @@ async def auth_phone_received(message: Message, state: FSMContext, db_user: User
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} Неверный формат номера.",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         return
 
@@ -135,7 +147,7 @@ async def auth_phone_received(message: Message, state: FSMContext, db_user: User
             message,
             db_user.id,
             f"Подождите {retry} сек. перед повторным запросом кода.",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         return
 
@@ -147,7 +159,7 @@ async def auth_phone_received(message: Message, state: FSMContext, db_user: User
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} {error}",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         return
 
@@ -157,7 +169,7 @@ async def auth_phone_received(message: Message, state: FSMContext, db_user: User
         message,
         db_user.id,
         f"{E.e(E.BELL, '🔔')} Код отправлен. Введите код из Telegram:",
-        reply_markup=account_method_keyboard(),
+        reply_markup=auth_cancel_keyboard(),
     )
     await state.set_state(AccountStates.waiting_code)
 
@@ -170,7 +182,7 @@ async def auth_code_received(message: Message, state: FSMContext, db_user: User)
             message,
             db_user.id,
             f"Подождите {retry} сек.",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         return
 
@@ -185,27 +197,30 @@ async def auth_code_received(message: Message, state: FSMContext, db_user: User)
         fingerprint=fingerprint,
         client=client,
     )
-    _phone_clients.pop(message.from_user.id, None)
 
     if error == "PASSWORD_NEEDED":
         await chat_ui.show_from_message(
             message,
             db_user.id,
             f"{E.e(E.LOCK_CLOSED, '🔒')} Введите пароль двухфакторной защиты:",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         await state.set_state(AccountStates.waiting_password)
         return
 
     if error or not session_string:
-        await state.clear()
+        if error in _UNRECOVERABLE_AUTH_ERRORS or (error and error.startswith("Слишком много")):
+            await _disconnect_phone_client(message.from_user.id)
+            await state.clear()
         await chat_ui.show_from_message(
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} {error or 'Ошибка авторизации'}",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard() if message.from_user.id in _phone_clients else account_method_keyboard(),
         )
         return
+
+    await _disconnect_phone_client(message.from_user.id)
 
     await save_account(db_user, session_string, name, data["phone"], fingerprint)
     await state.clear()
@@ -240,16 +255,17 @@ async def auth_password_received(message: Message, state: FSMContext, db_user: U
         session_string = await client.export_session_string()
         me = await client.get_me()
         name = f"{me.first_name or ''} {me.last_name or ''}".strip() or (me.username or DEFAULT_DISPLAY_NAME)
-        await client.disconnect()
     except PasswordHashInvalid:
         await chat_ui.show_from_message(
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} Неверный пароль.",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
         return
     except Exception as e:
+        await _disconnect_phone_client(message.from_user.id)
+        await state.clear()
         await chat_ui.show_from_message(
             message,
             db_user.id,
@@ -257,9 +273,8 @@ async def auth_password_received(message: Message, state: FSMContext, db_user: U
             reply_markup=account_method_keyboard(),
         )
         return
-    finally:
-        _phone_clients.pop(message.from_user.id, None)
 
+    await _disconnect_phone_client(message.from_user.id)
     await save_account(db_user, session_string, name, data["phone"], fingerprint)
     await state.clear()
     await chat_ui.show_from_message(
@@ -346,7 +361,7 @@ async def auth_tdata(callback: CallbackQuery, state: FSMContext, db_user: User) 
         callback,
         db_user.id,
         f"{E.e(E.FILE, '📁')} Отправьте ZIP-архив с папкой <code>tdata</code> из Telegram Desktop.",
-        reply_markup=account_method_keyboard(),
+        reply_markup=auth_cancel_keyboard(),
     )
     await state.set_state(AccountStates.waiting_tdata)
     await callback.answer()
@@ -373,7 +388,7 @@ async def auth_tdata_received(message: Message, state: FSMContext, db_user: User
                 message,
                 db_user.id,
                 f"{E.e(E.CROSS, '❌')} Папка сессии не найдена в архиве.",
-                reply_markup=account_method_keyboard(),
+                reply_markup=auth_cancel_keyboard(),
             )
             return
 
@@ -382,7 +397,7 @@ async def auth_tdata_received(message: Message, state: FSMContext, db_user: User
             message,
             db_user.id,
             f"{E.e(E.LOADING, '🔄')} Импорт сессии Telegram Desktop...",
-            reply_markup=account_method_keyboard(),
+            reply_markup=auth_cancel_keyboard(),
         )
 
         session_string, name, phone, error = await import_tdata_to_session_string(tdata_path, fingerprint)
@@ -391,7 +406,7 @@ async def auth_tdata_received(message: Message, state: FSMContext, db_user: User
                 message,
                 db_user.id,
                 f"{E.e(E.CROSS, '❌')} {error or 'Ошибка импорта'}",
-                reply_markup=account_method_keyboard(),
+                reply_markup=auth_cancel_keyboard(),
             )
             return
 

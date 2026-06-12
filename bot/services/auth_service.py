@@ -91,8 +91,10 @@ async def authorize_by_phone(
         session_string = await app.export_session_string()
         me = await app.get_me()
         name = f"{me.first_name or ''} {me.last_name or ''}".strip() or (me.username or DEFAULT_DISPLAY_NAME)
-        if should_disconnect:
+        try:
             await app.disconnect()
+        except Exception:
+            pass
         return session_string, name, None
     except PhoneCodeInvalid:
         if app and should_disconnect:

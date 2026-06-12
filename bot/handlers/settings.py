@@ -3,7 +3,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
-from bot.keyboards.main import settings_keyboard
+from bot.keyboards.main import settings_input_keyboard, settings_keyboard
 from bot.services import chat_ui
 from bot.states import SettingsStates
 from bot.utils import emojis as E
@@ -11,6 +11,16 @@ from database.database import async_session
 from database.models import User, UserSettings
 
 router = Router()
+
+DEFAULT_DELAY = 60
+DEFAULT_HOURLY = 10
+DEFAULT_DAILY = 40
+
+_SETTING_DEFAULTS = {
+    "delay": ("message_delay_sec", DEFAULT_DELAY, "КД"),
+    "hourly": ("hourly_limit", DEFAULT_HOURLY, "Лимит в час"),
+    "daily": ("daily_limit", DEFAULT_DAILY, "Лимит в день"),
+}
 
 
 async def get_user_settings(db_user: User) -> UserSettings:
@@ -36,6 +46,16 @@ def _settings_text(settings: UserSettings) -> str:
     )
 
 
+async def _show_settings_menu(callback: CallbackQuery, db_user: User) -> None:
+    settings = await get_user_settings(db_user)
+    await chat_ui.show_from_callback(
+        callback,
+        db_user.id,
+        _settings_text(settings),
+        reply_markup=settings_keyboard(),
+    )
+
+
 @router.message(F.text == "Настройки")
 async def menu_settings(message: Message, state: FSMContext, db_user: User) -> None:
     await state.clear()
@@ -48,13 +68,46 @@ async def menu_settings(message: Message, state: FSMContext, db_user: User) -> N
     )
 
 
+@router.callback_query(F.data == "settings_back")
+async def settings_back(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
+    await state.clear()
+    await _show_settings_menu(callback, db_user)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("settings_default_"))
+async def settings_default(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
+    key = callback.data.removeprefix("settings_default_")
+    if key not in _SETTING_DEFAULTS:
+        await callback.answer()
+        return
+
+    field, value, label = _SETTING_DEFAULTS[key]
+    async with async_session() as session:
+        settings = (
+            await session.execute(select(UserSettings).where(UserSettings.user_id == db_user.id))
+        ).scalar_one()
+        setattr(settings, field, value)
+        await session.commit()
+        await session.refresh(settings)
+
+    await state.clear()
+    await chat_ui.show_from_callback(
+        callback,
+        db_user.id,
+        f"{E.e(E.CHECK, '✅')} {label}: <b>{value}</b> (по умолчанию)\n\n{_settings_text(settings)}",
+        reply_markup=settings_keyboard(),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "settings_delay")
 async def settings_delay(callback: CallbackQuery, state: FSMContext, db_user: User) -> None:
     await chat_ui.show_from_callback(
         callback,
         db_user.id,
         f"{E.e(E.CLOCK, '⏰')} Введите КД между сообщениями в секундах (мин. 30):",
-        reply_markup=settings_keyboard(),
+        reply_markup=settings_input_keyboard("delay"),
     )
     await state.set_state(SettingsStates.waiting_delay)
     await callback.answer()
@@ -71,7 +124,7 @@ async def settings_delay_value(message: Message, state: FSMContext, db_user: Use
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} Введите число от 30 и выше.",
-            reply_markup=settings_keyboard(),
+            reply_markup=settings_input_keyboard("delay"),
         )
         return
 
@@ -98,7 +151,7 @@ async def settings_hourly(callback: CallbackQuery, state: FSMContext, db_user: U
         callback,
         db_user.id,
         f"{E.e(E.CHART_GROWTH, '📊')} Введите лимит сообщений в час:",
-        reply_markup=settings_keyboard(),
+        reply_markup=settings_input_keyboard("hourly"),
     )
     await state.set_state(SettingsStates.waiting_hourly)
     await callback.answer()
@@ -115,7 +168,7 @@ async def settings_hourly_value(message: Message, state: FSMContext, db_user: Us
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} Введите положительное число.",
-            reply_markup=settings_keyboard(),
+            reply_markup=settings_input_keyboard("hourly"),
         )
         return
 
@@ -142,7 +195,7 @@ async def settings_daily(callback: CallbackQuery, state: FSMContext, db_user: Us
         callback,
         db_user.id,
         f"{E.e(E.CALENDAR, '📅')} Введите лимит сообщений в день:",
-        reply_markup=settings_keyboard(),
+        reply_markup=settings_input_keyboard("daily"),
     )
     await state.set_state(SettingsStates.waiting_daily)
     await callback.answer()
@@ -159,7 +212,7 @@ async def settings_daily_value(message: Message, state: FSMContext, db_user: Use
             message,
             db_user.id,
             f"{E.e(E.CROSS, '❌')} Введите положительное число.",
-            reply_markup=settings_keyboard(),
+            reply_markup=settings_input_keyboard("daily"),
         )
         return
 

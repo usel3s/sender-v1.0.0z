@@ -5,7 +5,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
 import config
-from bot.keyboards.main import no_access_keyboard
+from bot.keyboards.main import no_access_keyboard, profile_keyboard
 from bot.services import chat_ui
 from bot.utils import emojis as E
 from database.database import async_session
@@ -88,4 +88,5 @@ async def menu_profile(message: Message, db_user: User) -> None:
         f"Аккаунт: <b>{account_text}</b>\n"
         f"КД: <b>{delay} сек</b>\n"
         f"Рассылка: <b>{'активна' if running else 'остановлена'}</b>",
+        reply_markup=profile_keyboard(),
     )

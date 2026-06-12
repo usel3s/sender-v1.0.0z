@@ -37,8 +37,41 @@ def no_access_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def back_button(callback_data: str = "admin_back") -> InlineKeyboardButton:
-    return InlineKeyboardButton(text="Назад", callback_data=callback_data, icon_custom_emoji_id=E.BACK)
+def back_button(callback_data: str = "admin_back", text: str = "Назад") -> InlineKeyboardButton:
+    return InlineKeyboardButton(text=text, callback_data=callback_data, icon_custom_emoji_id=E.BACK)
+
+
+def profile_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[back_button("menu_back")]])
+
+
+def auth_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Отмена",
+                    callback_data="auth_cancel",
+                    icon_custom_emoji_id=E.CROSS,
+                )
+            ]
+        ]
+    )
+
+
+def settings_input_keyboard(setting: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="По умолчанию",
+                    callback_data=f"settings_default_{setting}",
+                    icon_custom_emoji_id=E.BRUSH,
+                )
+            ],
+            [back_button("settings_back")],
+        ]
+    )
 
 
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
@@ -112,7 +145,7 @@ def qr_check_keyboard() -> InlineKeyboardMarkup:
                     icon_custom_emoji_id=E.CHECK,
                 )
             ],
-            [back_button("auth_cancel")],
+            [back_button("auth_cancel", text="Отмена")],
         ]
     )
 
