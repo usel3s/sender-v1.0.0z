@@ -43,7 +43,7 @@ python main.py
 
 ## Функции
 
-- Вход в аккаунт: телефон, QR-код, TData (opentele)
+- Вход в аккаунт: телефон, QR-код, TData (без PyQt5)
 - Загрузка списка получателей (.txt)
 - Настройка КД между сообщениями и лимитов
 - Рассылка в ЛС с защитой от FloodWait
@@ -61,7 +61,9 @@ python main.py
 
 ## TData
 
-Отправьте ZIP-архив с папкой `tdata` из Telegram Desktop через меню «Аккаунт → Через TData».
+Отправьте ZIP-архив с папкой `tdata` из Telegram Desktop через меню «Аккаунт → Сессия Telegram Desktop».
+
+Импорт использует `tdata-reader` (чистый Python, без PyQt5 и системных GUI-библиотек на VPS).
 
 ## Безопасность
 
